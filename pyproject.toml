@@ -1,0 +1,7 @@
+[project]
+name = "open-jev"
+version = "0.1.0"
+description = "Four toy decision models: typed questions in, calibrated option probabilities out, no text generation."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
