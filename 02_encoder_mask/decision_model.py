@@ -41,7 +41,10 @@ def normalise_options(question):
 
 class DecisionModel:
     def __init__(self, model_name=MODEL_NAME, device=None):
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = device or (
+            "cuda" if torch.cuda.is_available()
+            else "mps" if torch.backends.mps.is_available() else "cpu"
+        )
         self.tok = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForMaskedLM.from_pretrained(model_name).to(self.device)
         self.model.eval()

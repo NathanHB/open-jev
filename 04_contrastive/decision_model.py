@@ -110,18 +110,25 @@ class DecisionModel(torch.nn.Module):
         a = self._project(self.action_head, self.embed(candidates))
         return self.scale() * (a @ s)
 
+    @torch.no_grad()
     def predict(self, state, questions):
         """
         questions: {question_id: {"type": ..., "instructions": ..., "criteria": ...}}
         Returns {question_id: {option_key: probability}}. The state tower reads
-        state + question; each option is embedded on its own.
+        state + question; each option is embedded on its own. All state texts
+        are embedded in one batch, all (uncached) options in another.
         """
-        out = {}
-        for qid, q in questions.items():
-            opts = normalise_options(q)
-            state_text = f"{state}\n\n{q['instructions']}" if state else q["instructions"]
-            probs = self.scores(state_text, [desc for _, desc in opts]).softmax(-1)
-            out[qid] = {key: p.item() for (key, _), p in zip(opts, probs)}
+        qids = list(questions)
+        opts = [normalise_options(questions[q]) for q in qids]
+        state_texts = [f"{state}\n\n{questions[q]['instructions']}" if state
+                       else questions[q]["instructions"] for q in qids]
+        s = self._project(self.state_head, self.embed(state_texts))
+        a = self._project(self.action_head, self.embed([d for o in opts for _, d in o]))
+        out, k = {}, 0
+        for i, (qid, o) in enumerate(zip(qids, opts)):
+            probs = (self.scale() * a[k : k + len(o)] @ s[i]).softmax(-1)
+            k += len(o)
+            out[qid] = {key: p.item() for (key, _), p in zip(o, probs)}
         return out
 
     # ---------- training ----------

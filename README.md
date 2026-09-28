@@ -49,7 +49,7 @@ What changes from one design to the next:
 | State encoded once for all questions | ✅ KV cache | ❌ | ❌ | ✅ via embedding cache |
 | Options see each other | ✅ | ✅ | ✅ | ❌ |
 | Position bias | Rotate options at inference | Rotate options at inference | Shuffle options in training | None, by construction |
-| Speed | Slowest | Fast | Fast | Fastest with many or reused options |
+| Speed ([measured](#speed)) | Slowest (branches run one by one) | Fast | Fast | Fastest with many or reused options |
 
 ## Quickstart
 
@@ -64,10 +64,35 @@ cd 04_contrastive && uv run decision_model.py       # trains ~3 min
 
 They run on CUDA, Apple Silicon (MPS) or CPU. The numbers in each folder's README come from an Apple Silicon laptop and can differ slightly on other hardware.
 
+## Speed
+
+Each model ran in its own job on an **A100 80GB** (`benchmark_speed.py`). The numbers are median latency per request, with the same ticket and N distinct questions, a fresh ticket every call, and one warm-up call first.
+
+| Model | Params | 1 question | 10 questions | 100 questions | Per question @ 100 |
+|---|---|---|---|---|---|
+| 01 decoder · Qwen3.5-0.8B | 752M | 111 ms | 618 ms | 5,732 ms | 57.3 ms |
+| 01 decoder · Qwen3.5-4B | 4,206M | 150 ms | 837 ms | 7,864 ms | 78.6 ms |
+| 02 encoder + mask · ModernBERT-Large-Instruct | 396M | 23 ms | 27 ms | 109 ms | 1.1 ms |
+| 03 encoder + markers · ModernBERT-base | 149M | 16 ms | 20 ms | 124 ms | 1.2 ms |
+| 04 contrastive, cold · Qwen3-Embedding-0.6B | 600M | 77 ms | 83 ms | 140 ms | 1.4 ms |
+| 04 contrastive, warm (options cached) | 600M | 41 ms | 43 ms | 96 ms | 1.0 ms |
+| *Jev (API, measured by [Hume](https://archerhume.com/posts/jevs-architecture-unmasked/))* | *undisclosed* | *~87 ms* | | | *~0.4 ms @ 1,500 (~610 ms total)* |
+| *Jev ([TypeSafe's claim](https://typesafe.ai/blog/introducing-system-one-models-and-jev))* | *undisclosed* | *70–500 ms per request* | | | |
+
+- **01 grows linearly** because our toy runs each question's branch as its own forward pass. Batching the branches would make it nearly flat, and that's presumably what gives Jev about 0.4 ms per question.
+- **02 and 03** batch every question into one forward pass, so 10 questions cost barely more than 1.
+- **04** has the highest fixed cost (two embedding calls) but grows the least, and caching the options saves about 40 ms per request.
+- The Jev rows are external measurements through the API (network included, unknown hardware), so they're not directly comparable with ours.
+- Setup: 01 ran in bf16 with `flash-linear-attention` (`causal_conv1d` not installed); 02, 03 and 04 ran in fp32 with default attention.
+
+```bash
+uv run benchmark_speed.py --only 02 03    # model ids: 01-0.8b 01-4b 02 03 04
+```
+
 ## Which one when?
 
 - **The decision needs knowledge or reasoning** (medicine, law, puzzles): use **01**. Nothing else knows enough.
-- **Many questions about one long document:** use **01**, because the KV cache reuses the document.
+- **Many questions about one long document:** **01** reuses the document through the KV cache, but only pays off once its question branches are batched (see [Speed](#speed)).
 - **A narrow, high-volume task with labelled data** (routing, moderation): use **03**. It's tiny and fast once trained.
 - **Picking among many or reusable candidates** (tools, next actions, best-of-N answers): use **04**. Candidates are embedded once and cached.
 
